@@ -1,0 +1,277 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby : 
+VAGRANTFILE_API_VERSION = "2"
+
+=begin
+############################
+Machine Setup Instructions
+############################
+
+1. Install vagrant plugins:
+	$vagrant plugin install vagrant-reload
+	$vagrant plugin install vagrant-vbguest
+	$vagrant plugin install vagrant-disksize
+
+2. Boot up machines
+	# vagrant up <machine>
+
+3. Set display properties
+	3.1. $ssh -X <machine>
+	3.2 login with vagrant:vagrant
+	3.3 $startx
+	3.4 Set display resolution to 1280x768 (Required for automation scripts)
+	3.5 $DISPLAY=:0.0 xhost +SI:localuser:root (Allow sudo to use the display)
+
+4. Start media emulators
+	4.1. $sudo modprobe v4l2loopback exclusive-caps=1
+	4.2. $sudo modprobe snd_aloop
+
+5. 
+=end
+
+
+
+$base_provision_script = <<SCRIPT
+apt-get update
+
+#Install development tools
+apt-get install -y build-essential
+apt-get install -y g++
+apt-get install -y linux-generic
+apt-get install -y python
+apt-get install -y python-dev
+apt-get install -y python-pip
+apt-get install -y python-tk
+apt-get install -y python3-pip
+pip install pyautogui
+
+#cmake
+wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | sudo apt-key add -
+sudo apt-add-repository 'deb https://apt.kitware.com/ubuntu/ bionic main'
+apt-get update
+apt-get install -y cmake
+
+#Install utilities
+apt install gnutls-bin
+apt-get install -y git
+apt-get install -y tmux
+apt-get install -y htop
+apt-get install -y bmon
+apt-get install -y net-tools
+apt-get install -y traceroute
+apt-get install -y ntp
+apt-get install -y iperf3
+apt-get install -y sshpass
+apt-get install -y firefox
+
+#Install Python packages
+pip install requests
+pip install termcolor
+pip install Flask
+
+#Analytics python packages
+pip install dpkt
+pip install scipy
+pip install joblib
+pip install matplotlib
+pip install sklearn
+pip install xgboost
+
+#Stegozoa python3 packages
+pip3 install crccheck
+pip3 install numpy
+pip3 install matplotlib
+pip3 install scipy
+pip3 install pandas
+
+#Install graphical environment
+apt-get install -y xfce4
+apt-get install -y slim
+systemctl set-default graphical
+echo -e "default_user	vagrant\nauto_login	yes" >> /etc/slim.conf
+
+#Install audiovisual components
+apt-get install -y libnetfilter-queue-dev
+apt-get install -y ffmpeg
+apt-get install -y v4l2loopback-dkms
+apt-get install -y imagemagick
+apt-get install -y vlc
+apt-get install -y pulseaudio
+apt-get install -y alsa-utils
+
+echo "192.168.3.100	jitsi" >> /etc/hosts # Uncomment this for the jitsi setup
+echo "export PATH=\"$PATH:/home/vagrant/Chromium/depot_tools\"" >> /etc/profile
+
+SCRIPT
+
+$chromium_provision_script = <<SCRIPT
+
+
+#Fetch Google Deployment Tools
+cd /home/vagrant/
+mkdir Chromium
+cd Chromium
+git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+
+#Fetch Chromium code
+git config --global core.precomposeUnicode true
+mkdir chromium && cd chromium
+fetch chromium
+cd src
+
+#Checkout particular Chromium build, stable version
+git checkout -b frozen 89.0.4389.82
+gclient sync --with_branch_heads --with_tags
+
+#Build dependencies
+./build/install-build-deps.sh
+
+#Run hooks
+gclient runhooks
+
+#Setup build
+gn gen out/quick_build
+
+#Configure build arguments => /home/vagrant/Chromium/chromium/src/out/quick_build/args.gn
+#gn args out/quick_build
+#	#Include these options
+#	is_debug = false
+#	is_component_build = true
+#	symbol_level = 0
+echo -e "is_debug = false\nis_component_build = true\nsymbol_level = 0" >> out/quick_build/args.gn
+
+#Build Chromium 
+#(Prefer building with stegozoa's controlled versions through ansible in scripts/)
+#autoninja -C out/quick_build/ chrome
+
+SCRIPT
+
+$middlebox_provision_script = <<SCRIPT
+
+sysctl -w net.ipv4.ip_forward=1
+iptables -t nat -A POSTROUTING -o enp0s3 -j MASQUERADE
+
+SCRIPT
+
+
+Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
+
+    # Always use Vagrant's default insecure key
+    config.ssh.insert_key = false
+	# Always use X11 Forwarding with this machine
+    config.ssh.forward_x11 = true
+	# To avoid/allow install and uninstall of VBoxGuessAdditions.
+    config.vbguest.auto_update = false  
+	# Disable/enable automatic box update checking.
+    config.vm.box_check_update = false  
+
+    #Storage
+	config.disksize.size = '250GB'
+
+	config.vm.define "stegozoa1" do |stegozoa1_config|
+		stegozoa1_config.vm.box = "ubuntu/bionic64"
+		stegozoa1_config.vm.hostname = "stegozoa1"
+
+		#Networking
+		# 
+		#Give a virtual IP address to the new interfaces and bridge them with the physical machine interface 
+		#  so that multiple VMs can communicate through their own virtual network
+		#
+		#Alternatively, if the VMs are all within the same host, it suffices to create a private network:
+		stegozoa1_config.vm.network "private_network", ip: "192.168.50.100", name: "vboxnet1"
+		#stegozoa1_config.vm.network "public_network", bridge: "enp3s0", ip: "192.168.4.100"
+
+		#Provisioning
+		stegozoa1_config.vm.provision "shell", inline: $base_provision_script
+		stegozoa1_config.vm.provision :reload
+		stegozoa1_config.vm.provision "shell", inline: $chromium_provision_script, privileged: false
+		stegozoa1_config.vm.synced_folder "SharedFolder/", "/home/vagrant/SharedFolder", create: true
+		
+		#VM Settings
+		stegozoa1_config.vm.provider "virtualbox" do |vb|
+				vb.name = "Stegozoa1"
+				vb.gui = false
+				vb.customize ["modifyvm", :id, "--vram", "128"]
+				vb.customize ["modifyvm", :id, "--nictype1", "virtio"]
+				vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+				vb.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
+				vb.customize ["modifyvm", :id, "--uartmode1", "disconnected"]
+				vb.memory = "8192"
+				vb.cpus = "4"
+			end # of vb
+		end # of stegozoa1_config end
+
+
+
+	config.vm.define "stegozoa2" do |stegozoa2_config|
+		stegozoa2_config.vm.box = "ubuntu/bionic64"
+		stegozoa2_config.vm.hostname = "stegozoa2"
+
+		#Networking
+		#
+		# Give a virtual IP address to the new interfaces and bridge them with the physical machine interface 
+		#  so that multiple VMs can communicate through their own virtual network
+		#
+		#Alternatively, if the VMs are all within the same host, it suffices to create a private network:
+		stegozoa2_config.vm.network "private_network", ip: "192.168.51.101", name: "vboxnet2"
+		#stegozoa2_config.vm.network "public_network", bridge: "enp3s0", ip: "192.168.5.101"
+		#stegozoa2_config.vm.network "public_network", bridge: "enp3s0", ip: "192.168.6.100"
+
+		#Provisioning
+		stegozoa2_config.vm.provision "shell", inline: $base_provision_script
+		stegozoa2_config.vm.provision :reload
+		stegozoa2_config.vm.provision "shell", inline: $chromium_provision_script, privileged: false
+		stegozoa2_config.vm.synced_folder "SharedFolder/", "/home/vagrant/SharedFolder", create: true
+
+		#VM Settings
+		stegozoa2_config.vm.provider "virtualbox" do |vb|
+				vb.name = "Stegozoa2"
+				vb.gui = false
+				vb.customize ["modifyvm", :id, "--vram", "128"]
+				vb.customize ["modifyvm", :id, "--nictype1", "virtio"]
+				vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+				vb.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
+				vb.customize ["modifyvm", :id, "--uartmode1", "disconnected"]
+				vb.memory = "8192"
+				vb.cpus = "4"
+			end # of vb
+		end # of stegozoa2_config end
+
+	
+	config.vm.define "middlebox" do |middlebox_config|
+		middlebox_config.vm.box = "ubuntu/bionic64"
+		middlebox_config.vm.hostname = "middlebox"
+
+		#Networking
+		#
+		# Give a virtual IP address to the new interfaces and bridge them with the physical machine interface 
+		#  so that multiple VMs can communicate through their own virtual network
+		#
+		#Alternatively, if the VMs are all within the same host, it suffices to create a private network:
+		middlebox_config.vm.network "private_network", ip: "192.168.50.103", name: "vboxnet1"
+		middlebox_config.vm.network "private_network", ip: "192.168.51.104", name: "vboxnet2"
+		#middlebox_config.vm.network "public_network", bridge: "enp3s0", ip: "192.168.5.101"
+		#middlebox_config.vm.network "public_network", bridge: "enp3s0", ip: "192.168.6.100"
+
+		#Provisioning
+		middlebox_config.vm.provision "shell", inline: $base_provision_script
+		middlebox_config.vm.provision :reload
+		middlebox_config.vm.provision "shell", inline: $middlebox_provision_script, run: "always"
+		middlebox_config.vm.synced_folder "SharedFolder/", "/home/vagrant/SharedFolder", create: true
+
+		
+		#VM Settings
+		middlebox_config.vm.provider "virtualbox" do |vb|
+				vb.name = "Middlebox"
+				vb.gui = false
+				vb.customize ["modifyvm", :id, "--vram", "128"]
+				vb.customize ["modifyvm", :id, "--nicpromisc2", "allow-all", "--nicpromisc3", "allow-all"]
+				vb.customize ["modifyvm", :id, "--nictype1", "virtio"]
+				vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+				vb.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
+				vb.customize ["modifyvm", :id, "--uartmode1", "disconnected"]
+				vb.memory = "2048"
+				vb.cpus = "2"
+			end # of vb
+		end # of middlebox_config end
+end # of config

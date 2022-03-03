@@ -1,0 +1,59 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby : 
+VAGRANTFILE_API_VERSION = "2"
+
+=begin
+############################
+Machine Setup Instructions
+############################
+
+1. Install vagrant plugins:
+	$vagrant plugin install vagrant-vbguest
+	$vagrant plugin install vagrant-disksize
+	$vagrant plugin install vagrant-reload
+
+2. Boot up machines
+	# vagrant up <machine>
+=end
+
+Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
+
+    # Always use Vagrant's default insecure key
+    config.ssh.insert_key = false
+	# Always use X11 Forwarding with this machine
+    config.ssh.forward_x11 = true
+	# To avoid/allow install and uninstall of VBoxGuessAdditions.
+    config.vbguest.auto_update = false  
+	# Disable/enable automatic box update checking.
+    config.vm.box_check_update = false  
+
+    #Storage
+	config.disksize.size = '50GB'
+
+	config.vm.define "jitsi" do |jitsi_config|
+		jitsi_config.vm.box = "ubuntu/focal64"
+		jitsi_config.vm.hostname = "jitsi"
+
+		#Networking
+		jitsi_config.vm.network "private_network", ip: "192.168.3.100"
+		
+		#Provisioning
+		jitsi_config.vm.provision "shell", path: "jitsi.sh"
+		jitsi_config.vm.provision :reload # probably unnecessary
+		jitsi_config.vm.provision "shell", path: "jibri.sh"
+		jitsi_config.vm.synced_folder "SharedFolder/", "/home/vagrant/SharedFolder", create: true
+		
+		#VM Settings
+		jitsi_config.vm.provider "virtualbox" do |vb|
+				vb.name = "jitsi"
+				vb.gui = false
+				vb.customize ["modifyvm", :id, "--vram", "128"]
+				vb.customize ["modifyvm", :id, "--nictype1", "virtio"]
+				vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+				vb.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
+				vb.memory = "4096" # you could need 8192 MB, since jibri has such recommended requirement
+				vb.cpus = "4"
+			end # of vb
+		end # of jitsi_config end
+
+end # of config

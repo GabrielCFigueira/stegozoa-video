@@ -1,0 +1,8 @@
+#ifndef STEGOZOA_MACROS_H_
+#define STEGOZOA_MACROS_H_
+
+#define STEGOZOA 1
+
+#define IMAGE_QUALITY 1
+
+#endif //STEGOZOA_MACROS_H_

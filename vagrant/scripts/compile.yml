@@ -1,0 +1,92 @@
+- hosts: nodes
+  become: no
+  remote_user: vagrant
+
+  tasks:
+
+  
+  - name: pull latest changes
+    git:
+      repo: "{{ repoURL }}"
+      dest: "{{ repoPath }}"
+      update: yes
+      version: master
+      accept_hostkey: yes
+
+  - name: Create Stegozoa hooks directory
+    file:
+      state: directory
+      path: "{{ libvpxDir }}/source/libvpx/vp8/common/stegozoa_hooks"
+      
+  - name: Copy hook files
+    synchronize:
+      src: "{{ repoPath }}/src/stegozoa_hooks/"
+      dest: "{{ libvpxDir }}/source/libvpx/vp8/common/stegozoa_hooks/"
+      delete: yes
+    delegate_to: "{{ inventory_hostname }}"
+
+  - name: Copy macro file
+    copy:
+      src: "{{ repoPath }}/src/stegozoa_hooks/macros/{{ build }}.h"
+      remote_src: yes
+      dest: "{{ libvpxDir }}/source/libvpx/vp8/common/stegozoa_hooks/macros.h"  
+
+  - name: Overwrite vpx files
+    synchronize:
+      src: "{{ repoPath }}/libvpx_patches/"
+      dest: "{{ libvpxDir }}"
+    delegate_to: "{{ inventory_hostname }}"
+  
+  - name: Overwrite webrtc files
+    synchronize:
+      src: "{{ repoPath }}/webrtc_patches/"
+      dest: "{{ webrtcDir }}"
+    delegate_to: "{{ inventory_hostname }}"
+
+  - name: Creating Chromium Configuration
+    copy:
+      content: |
+        is_component_build = true
+        is_debug = false
+        symbol_level = 0
+        enable_nacl = false
+      dest: "{{ chromiumDir }}/src/out/quick_build/args.gn"
+  
+  - name: Generate dependencies and definition files
+    shell: "export PATH=\"$PATH:/home/vagrant/Chromium/depot_tools\" && ./generate_gni.sh"
+    args:
+      chdir: "{{ libvpxDir }}"
+
+  - name: Compiling Chromium (this can take a while)
+    shell: "export PATH=\"$PATH:/home/vagrant/Chromium/depot_tools\" && autoninja -C out/quick_build/ chrome"
+    args:
+      chdir: "{{ chromiumDir }}/src"
+    register: result
+    ignore_errors: yes
+
+  - name: Save the output to a file
+    delegate_to: localhost
+    blockinfile:
+      path: "{{ logFile }}"
+      block: "=== {{ inventory_hostname }}: ======\n{{ result.start }} : {{ result.end }}\n{{ result.stdout }}"
+      mode: 0664
+      create: yes
+      marker: "-------------------------------------------------------"
+  
+  - name: Interrupt the playbook if the compilation has failed
+    debug:
+      var: result
+    failed_when: true
+    when:
+      result is failed
+  
+  - name: Create Chromium builds directory
+    file:
+      state: directory
+      path: "{{ chromiumBuild }}"
+  
+  - name: Copy new chromium build
+    synchronize:
+      src: "{{ chromiumDir }}/src/out/quick_build/"
+      dest: "{{ chromiumBuild }}/{{ build }}/"
+    delegate_to: "{{ inventory_hostname }}"

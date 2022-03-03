@@ -1,0 +1,17 @@
+- hosts: nodes
+  become: no
+  remote_user: vagrant
+
+  tasks:
+
+
+  - name: Enabling Video camera emulator
+    shell: modprobe v4l2loopback exclusive-caps=1
+    become: yes
+
+  - name: Enabling Audio microphone emulator
+    shell: modprobe snd_aloop
+    become: yes
+
+  - name: Set the resolution to 1920x1080
+    shell: xrandr -s 1920x1080 -d :0.0
